@@ -15,12 +15,148 @@ export const useRecording = () => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
-  
+
   // 添加防重复处理机制
   const processingRef = useRef({ isProcessingAudio: false, lastProcessTime: 0 });
 
+  // 声音结束检测相关引用
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const sourceRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const silenceDetectorRef = useRef({
+    silenceStartTime: null,
+    isBelowThreshold: false,
+    checkInterval: null
+  });
+
   // 使用模型状态Hook
   const modelStatus = useModelStatus();
+
+  // 启动声音结束检测
+  const startSilenceDetection = useCallback(() => {
+    if (!streamRef.current || audioContextRef.current) return;
+
+    try {
+      console.log("🔇 启动声音结束检测");
+
+      // 创建音频上下文和分析器
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+
+      const source = audioContext.createMediaStreamSource(streamRef.current);
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      sourceRef.current = source;
+
+      // 重置静音检测器
+      silenceDetectorRef.current = {
+        silenceStartTime: null,
+        isBelowThreshold: false,
+        checkInterval: null
+      };
+
+      const SILENCE_THRESHOLD = 0.25; // 25%音量阈值，用于检测静音
+      const SILENCE_DURATION = 1000; // 1秒静音后自动停止
+
+      // 音量监测循环
+      const monitorVolume = () => {
+        if (!analyserRef.current) return;
+
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        // 计算平均音量
+        const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+        const normalizedVolume = average / 255; // 归一化到0-1
+        const volumePercent = (normalizedVolume * 100).toFixed(1);
+
+        const isBelowThreshold = normalizedVolume < SILENCE_THRESHOLD;
+        const now = Date.now();
+
+        // 每500毫秒记录一次音量状态
+        if (now % 500 < 100) {
+          console.log(`🔇 录音音量监测: ${volumePercent}% | 阈值: ${(SILENCE_THRESHOLD * 100).toFixed(0)}% | 状态: ${
+            isBelowThreshold ? '静音' : '有声音'
+          }`);
+        }
+
+        if (isBelowThreshold) {
+          // 当前是静音
+          if (!silenceDetectorRef.current.isBelowThreshold) {
+            // 刚进入静音状态
+            silenceDetectorRef.current.silenceStartTime = now;
+            silenceDetectorRef.current.isBelowThreshold = true;
+            console.log(`🔇 检测到静音开始 (${volumePercent}% < ${(SILENCE_THRESHOLD * 100).toFixed(0)}%)`);
+          } else if (silenceDetectorRef.current.silenceStartTime &&
+                     (now - silenceDetectorRef.current.silenceStartTime) >= SILENCE_DURATION) {
+            // 静音持续时间足够，自动停止录音
+            console.log(`🏁 静音超过${SILENCE_DURATION}ms，自动停止录音`);
+            console.log(`📊 静音检测统计:`);
+            console.log(`   - 静音时长: ${now - silenceDetectorRef.current.silenceStartTime}ms`);
+            console.log(`   - 音量: ${volumePercent}%`);
+            console.log(`   - 阈值: ${(SILENCE_THRESHOLD * 100).toFixed(0)}%`);
+
+            stopSilenceDetection();
+            // 直接停止MediaRecorder，避免递归调用stopRecording
+            if (mediaRecorderRef.current) {
+              mediaRecorderRef.current.stop();
+            }
+            return;
+          }
+        } else {
+          // 当前有声音，重置静音检测
+          if (silenceDetectorRef.current.isBelowThreshold) {
+            const silenceDuration = now - (silenceDetectorRef.current.silenceStartTime || now);
+            console.log(`🎤 声音恢复 (${volumePercent}% >= ${(SILENCE_THRESHOLD * 100).toFixed(0)}%)，静音时长: ${silenceDuration}ms`);
+          }
+
+          silenceDetectorRef.current.silenceStartTime = null;
+          silenceDetectorRef.current.isBelowThreshold = false;
+        }
+
+        animationFrameRef.current = requestAnimationFrame(monitorVolume);
+      };
+
+      monitorVolume();
+
+    } catch (error) {
+      console.error("❌ 声音结束检测启动失败:", error);
+    }
+  }, []);
+
+  // 停止声音结束检测
+  const stopSilenceDetection = useCallback(() => {
+    console.log("⏹️ 停止声音结束检测");
+
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (sourceRef.current) {
+      sourceRef.current.disconnect();
+      sourceRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    analyserRef.current = null;
+
+    // 重置静音检测器
+    silenceDetectorRef.current = {
+      silenceStartTime: null,
+      isBelowThreshold: false,
+      checkInterval: null
+    };
+  }, []);
 
   // 开始录音
   const startRecording = useCallback(async () => {
@@ -102,15 +238,23 @@ export const useRecording = () => {
       mediaRecorder.start(1000); // 每秒收集一次数据
       setIsRecording(true);
 
+      // 启动声音结束检测
+      setTimeout(() => {
+        startSilenceDetection();
+      }, 200); // 延迟200ms启动检测，避免立即检测到静音
+
     } catch (err) {
       setError(`无法开始录音: ${err.message}`);
       setIsRecording(false);
     }
-  }, [modelStatus.isReady, modelStatus.isLoading, modelStatus.error]);
+  }, [modelStatus.isReady, modelStatus.isLoading, modelStatus.error, startSilenceDetection]);
 
   // 停止录音
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
+      // 先停止声音结束检测
+      stopSilenceDetection();
+
       mediaRecorderRef.current.stop();
 
       // 停止所有音频轨道
@@ -119,7 +263,7 @@ export const useRecording = () => {
         streamRef.current = null;
       }
     }
-  }, [isRecording]);
+  }, [isRecording, stopSilenceDetection]);
 
   // 处理音频
   const processAudio = useCallback(async (audioBlob) => {
@@ -339,6 +483,9 @@ export const useRecording = () => {
 
   // 取消录音
   const cancelRecording = useCallback(() => {
+    // 停止声音结束检测
+    stopSilenceDetection();
+
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
     }
@@ -352,7 +499,7 @@ export const useRecording = () => {
     setIsProcessing(false);
     setError(null);
     audioChunksRef.current = [];
-  }, []);
+  }, [stopSilenceDetection]);
 
   // 获取录音权限状态
   const checkPermissions = useCallback(async () => {
@@ -367,6 +514,12 @@ export const useRecording = () => {
     }
   }, []);
 
+  // 清理资源
+  useEffect(() => {
+    return () => {
+      stopSilenceDetection();
+    };
+  }, [stopSilenceDetection]);
 
   return {
     isRecording,

@@ -347,10 +347,10 @@ export default function App() {
 
         setCurrentVolume(normalizedVolume);
 
-        // 检测音量超过20%且可以触发录音
+        // 检测音量超过25%且可以触发录音
         const now = Date.now();
         const cooldown = 3000; // 3秒冷却时间，防止重复触发
-        const volumeThreshold = 0.20; // 20%音量阈值
+        const volumeThreshold = 0.25; // 25%音量阈值
 
         // 实时记录音量和阈值信息
         const volumePercent = (normalizedVolume * 100).toFixed(1);
@@ -871,15 +871,15 @@ export default function App() {
                   {/* 显示当前音量指示器 */}
                   {voiceActivationEnabled && (
                     <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-10 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden relative">
-                      {/* 20%阈值线 */}
+                      {/* 25%阈值线 */}
                       <div
                         className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
-                        style={{ left: '20%' }}
+                        style={{ left: '25%' }}
                       ></div>
                       {/* 当前音量显示 */}
                       <div
                         className={`h-full transition-all duration-100 ${
-                          currentVolume > 0.20 ? 'bg-red-500' : 'bg-emerald-500'
+                          currentVolume > 0.25 ? 'bg-red-500' : 'bg-emerald-500'
                         }`}
                         style={{ width: `${Math.min(currentVolume * 100, 100)}%` }}
                       ></div>
@@ -964,8 +964,8 @@ export default function App() {
             ) : micState === "optimizing" ? (
               "AI正在优化文本，请稍候..."
             ) : voiceActivationEnabled ? (
-              `语音激活已开启 | 音量: ${(currentVolume * 100).toFixed(1)}% | 阈值: 20% | 状态: ${
-                currentVolume > 0.20 ? '超过阈值' : '等待声音'
+              `语音激活已开启 | 音量: ${(currentVolume * 100).toFixed(1)}% | 阈值: 25% | 状态: ${
+                currentVolume > 0.25 ? '超过阈值' : '等待声音'
               }`
             ) : (
               `点击麦克风或按 ${hotkey} 开始录音`
