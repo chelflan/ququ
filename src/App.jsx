@@ -219,6 +219,8 @@ export default function App() {
   const [processedText, setProcessedText] = useState("");
   const [showTextArea, setShowTextArea] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [voiceActivationEnabled, setVoiceActivationEnabled] = useState(false);
+  const [currentVolume, setCurrentVolume] = useState(0);
   
   const { isDragging, handleMouseDown, handleMouseMove, handleMouseUp, handleClick } = useWindowDrag();
   const modelStatus = useModelStatus();
@@ -241,6 +243,13 @@ export default function App() {
   // 防重复粘贴的引用
   const lastPasteRef = useRef({ text: '', timestamp: 0 });
   const PASTE_DEBOUNCE_TIME = 1000; // 1秒内相同文本不重复粘贴
+
+  // 音量监测相关引用
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const streamRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const volumeCheckRef = useRef({ lastTrigger: 0, isProcessing: false });
 
   // 安全粘贴函数
   const safePaste = useCallback(async (text) => {
@@ -276,6 +285,203 @@ export default function App() {
       });
     }
   }, []);
+
+  // 简单的音量监测函数
+  const startVolumeMonitoring = useCallback(async () => {
+    try {
+      // 先停止现有的音量监测（避免重复启动）
+      if (animationFrameRef.current || streamRef.current) {
+        console.log("🔄 清理现有音量监测资源");
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+        }
+        analyserRef.current = null;
+      }
+
+      // 获取麦克风权限
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+
+      streamRef.current = stream;
+
+      // 创建音频上下文和分析器
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      console.log("🎤 音量监测已启动");
+
+      // 音量监测循环
+      const monitorVolume = () => {
+        if (!analyserRef.current) return;
+
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        // 计算平均音量
+        const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+        const normalizedVolume = average / 255; // 归一化到0-1
+
+        setCurrentVolume(normalizedVolume);
+
+        // 检测音量超过20%且可以触发录音
+        const now = Date.now();
+        const cooldown = 3000; // 3秒冷却时间，防止重复触发
+        const volumeThreshold = 0.20; // 20%音量阈值
+
+        // 实时记录音量和阈值信息
+        const volumePercent = (normalizedVolume * 100).toFixed(1);
+        const thresholdPercent = (volumeThreshold * 100).toFixed(0);
+
+        // 每500毫秒记录一次当前音量状态
+        if (now % 500 < 100) { // 简单的时间判断，避免频繁日志
+          console.log(`🎤 音量监测: 当前音量 ${volumePercent}% | 阈值 ${thresholdPercent}% | 状态: ${
+            normalizedVolume > volumeThreshold ? '超过阈值' : '低于阈值'
+          } | 录音状态: ${isRecording ? '录音中' : '空闲'} | 模型状态: ${modelStatus.isReady ? '就绪' : '未就绪'}`);
+        }
+
+        if (
+          normalizedVolume > volumeThreshold &&
+          !isRecording &&
+          !isRecordingProcessing &&
+          modelStatus.isReady &&
+          !volumeCheckRef.current.isProcessing &&
+          (now - volumeCheckRef.current.lastTrigger) > cooldown
+        ) {
+          volumeCheckRef.current.lastTrigger = now;
+          volumeCheckRef.current.isProcessing = true;
+
+          console.log(`🎯 检测到声音超过阈值！音量: ${volumePercent}% > 阈值 ${thresholdPercent}%`);
+          console.log(`📊 触发条件检查:`);
+          console.log(`   - 音量超阈值: ${volumePercent}% > ${thresholdPercent}% ✓`);
+          console.log(`   - 未在录音: ${!isRecording} ✓`);
+          console.log(`   - 未在处理: ${!isRecordingProcessing} ✓`);
+          console.log(`   - 模型就绪: ${modelStatus.isReady} ✓`);
+          console.log(`   - 冷却完成: ${(now - volumeCheckRef.current.lastTrigger)}ms > ${cooldown}ms ✓`);
+
+          toast.success(`🎤 检测到声音 (${volumePercent}% > ${thresholdPercent}%)，自动开始录音`);
+
+          // 停止音量监测并开始录音
+          if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+          }
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+          if (audioContextRef.current) {
+            audioContextRef.current.close();
+            audioContextRef.current = null;
+          }
+          analyserRef.current = null;
+          setCurrentVolume(0);
+
+          startRecording();
+
+          // 2秒后重置处理状态
+          setTimeout(() => {
+            volumeCheckRef.current.isProcessing = false;
+          }, 2000);
+
+          return; // 停止监测循环
+        }
+
+        animationFrameRef.current = requestAnimationFrame(monitorVolume);
+      };
+
+      monitorVolume();
+
+    } catch (error) {
+      console.error("音量监测启动失败:", error);
+      toast.error("无法启动音量监测");
+    }
+  }, [isRecording, isRecordingProcessing, modelStatus.isReady, startRecording]);
+
+  // 停止音量监测
+  const stopVolumeMonitoring = useCallback(() => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    analyserRef.current = null;
+    setCurrentVolume(0);
+    console.log("⏹️ 音量监测已停止");
+  }, []);
+
+  // 切换语音激活模式
+  const toggleVoiceActivation = useCallback(() => {
+    if (voiceActivationEnabled) {
+      stopVolumeMonitoring();
+      setVoiceActivationEnabled(false);
+      toast.info("语音激活已关闭");
+    } else {
+      startVolumeMonitoring();
+      setVoiceActivationEnabled(true);
+      toast.success("语音激活已开启，等待声音检测...");
+    }
+  }, [voiceActivationEnabled, startVolumeMonitoring, stopVolumeMonitoring]);
+
+  // 监听录音状态变化，处理语音激活恢复
+  useEffect(() => {
+    // 当录音停止且语音激活开启时，重新启动音量监测
+    if (!isRecording && !isRecordingProcessing && voiceActivationEnabled && modelStatus.isReady) {
+      // 延迟1秒重新启动音量监测，避免立即重新触发
+      const timer = setTimeout(() => {
+        console.log("🔄 录音已停止，重新启动音量监测");
+        startVolumeMonitoring();
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    }
+
+    // 当开始录音时，停止音量监测
+    if (isRecording && voiceActivationEnabled) {
+      console.log("⏹️ 开始录音，停止音量监测");
+      stopVolumeMonitoring();
+    }
+  }, [isRecording, isRecordingProcessing, voiceActivationEnabled, modelStatus.isReady, startVolumeMonitoring, stopVolumeMonitoring]);
+
+  // 清理音量监测资源
+  useEffect(() => {
+    return () => {
+      stopVolumeMonitoring();
+    };
+  }, [stopVolumeMonitoring]);
 
   // 处理录音完成（FunASR识别完成）
   const handleRecordingComplete = useCallback(async (transcriptionResult) => {
@@ -644,6 +850,44 @@ export default function App() {
             蛐蛐
           </h1>
           <div className="flex items-center space-x-3 non-draggable">
+            <Tooltip content={voiceActivationEnabled ? "关闭语音激活" : "开启语音激活"} position="bottom">
+              <button
+                onClick={toggleVoiceActivation}
+                className={`p-3 hover:bg-white/70 dark:hover:bg-gray-700/70 rounded-xl transition-colors shadow-sm ${
+                  voiceActivationEnabled
+                    ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-600'
+                    : 'hover:bg-white/70 dark:hover:bg-gray-700/70'
+                } border-2`}
+              >
+                <div className="relative">
+                  <Mic className={`w-6 h-6 ${
+                    voiceActivationEnabled
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-gray-700 dark:text-gray-300'
+                  }`} />
+                  {voiceActivationEnabled && (
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
+                  )}
+                  {/* 显示当前音量指示器 */}
+                  {voiceActivationEnabled && (
+                    <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-10 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden relative">
+                      {/* 20%阈值线 */}
+                      <div
+                        className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
+                        style={{ left: '20%' }}
+                      ></div>
+                      {/* 当前音量显示 */}
+                      <div
+                        className={`h-full transition-all duration-100 ${
+                          currentVolume > 0.20 ? 'bg-red-500' : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(currentVolume * 100, 100)}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+              </button>
+            </Tooltip>
             <Tooltip content="历史记录" position="bottom">
               <button
                 onClick={handleOpenHistory}
@@ -719,6 +963,10 @@ export default function App() {
               "正在识别语音..."
             ) : micState === "optimizing" ? (
               "AI正在优化文本，请稍候..."
+            ) : voiceActivationEnabled ? (
+              `语音激活已开启 | 音量: ${(currentVolume * 100).toFixed(1)}% | 阈值: 20% | 状态: ${
+                currentVolume > 0.20 ? '超过阈值' : '等待声音'
+              }`
             ) : (
               `点击麦克风或按 ${hotkey} 开始录音`
             )}
