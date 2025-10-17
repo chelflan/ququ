@@ -60,8 +60,8 @@ export const useRecording = () => {
         checkInterval: null
       };
 
-      const SILENCE_THRESHOLD = 0.25; // 25%音量阈值，用于检测静音
-      const SILENCE_DURATION = 1000; // 1秒静音后自动停止
+      const SILENCE_THRESHOLD = 0.08; // 8%音量阈值，用于检测静音（与App.jsx中的VOLUME_THRESHOLD保持一致）
+      const SILENCE_DURATION = 500; // 0.5秒静音后立即开始识别（更快的响应）
 
       // 音量监测循环
       const monitorVolume = () => {
