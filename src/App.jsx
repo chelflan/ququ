@@ -417,7 +417,7 @@ export default function App() {
         // ===== 智能语音检测逻辑 =====
 
         // 基础音量阈值
-        const VOLUME_THRESHOLD = 0.08; // 8%基础音量阈值
+        const VOLUME_THRESHOLD = 0.20; // 20%基础音量阈值
         const VOICE_BAND_THRESHOLD = 0.3; // 语音频段占比阈值
         const HIGH_FREQ_THRESHOLD = 0.15; // 高频成分阈值
 
@@ -996,16 +996,16 @@ export default function App() {
                   {/* 显示当前音量指示器 */}
                   {voiceActivationEnabled && (
                     <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-10 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden relative">
-                      {/* 8%基础阈值线 */}
+                      {/* 20%基础阈值线 */}
                       <div
                         className="absolute top-0 bottom-0 w-0.5 bg-yellow-500 z-10"
-                        style={{ left: '8%' }}
-                        title="语音检测阈值: 8%"
+                        style={{ left: '20%' }}
+                        title="语音检测阈值: 20%"
                       ></div>
                       {/* 当前音量显示 */}
                       <div
                         className={`h-full transition-all duration-100 ${
-                          currentVolume > 0.08 ? 'bg-emerald-500' : 'bg-gray-400'
+                          currentVolume > 0.20 ? 'bg-emerald-500' : 'bg-gray-400'
                         }`}
                         style={{ width: `${Math.min(currentVolume * 100, 100)}%` }}
                       ></div>
