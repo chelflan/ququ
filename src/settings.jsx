@@ -12,12 +12,12 @@ const SettingsPage = () => {
     ai_base_url: "https://api.openai.com/v1",
     ai_model: "gpt-3.5-turbo",
     enable_ai_optimization: true,
-    // 语音检测参数
-    voice_threshold: 20,
-    voice_band_threshold: 30,
-    high_freq_threshold: 15,
-    silence_duration: 500,
-    voice_frames_required: 3
+    // 语音检测参数 - 平衡灵敏度和防误触发
+    voice_threshold: 25,
+    voice_band_threshold: 40,
+    high_freq_threshold: 25,
+    silence_duration: 800,
+    voice_frames_required: 2
   });
   
   const [customModel, setCustomModel] = useState(false);
@@ -58,12 +58,12 @@ const SettingsPage = () => {
           ai_base_url: allSettings.ai_base_url || "https://api.openai.com/v1",
           ai_model: allSettings.ai_model || "gpt-3.5-turbo",
           enable_ai_optimization: allSettings.enable_ai_optimization !== false, // 默认为true
-          // 语音检测参数
-          voice_threshold: allSettings.voice_threshold || 20,
-          voice_band_threshold: allSettings.voice_band_threshold || 30,
-          high_freq_threshold: allSettings.high_freq_threshold || 15,
-          silence_duration: allSettings.silence_duration || 500,
-          voice_frames_required: allSettings.voice_frames_required || 3
+          // 语音检测参数 - 平衡灵敏度和防误触发
+          voice_threshold: allSettings.voice_threshold || 25,
+          voice_band_threshold: allSettings.voice_band_threshold || 40,
+          high_freq_threshold: allSettings.high_freq_threshold || 25,
+          silence_duration: allSettings.silence_duration || 800,
+          voice_frames_required: allSettings.voice_frames_required || 2
         };
         setSettings(prev => ({ ...prev, ...loadedSettings }));
         

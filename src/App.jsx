@@ -312,36 +312,36 @@ export default function App() {
   const getVoiceDetectionSettings = useCallback(async () => {
     try {
       if (window.electronAPI) {
-        const threshold = await window.electronAPI.getSetting('voice_threshold', 20);
+        const threshold = await window.electronAPI.getSetting('voice_threshold', 25); // 调整到25%，平衡灵敏度和防误触发
         setVoiceThreshold(threshold); // 更新UI显示的阈值
 
         return {
           volumeThreshold: threshold / 100, // 转换为小数
-          voiceBandThreshold: await window.electronAPI.getSetting('voice_band_threshold', 30) / 100,
-          highFreqThreshold: await window.electronAPI.getSetting('high_freq_threshold', 15) / 100,
-          silenceDuration: await window.electronAPI.getSetting('silence_duration', 500),
-          voiceFramesRequired: await window.electronAPI.getSetting('voice_frames_required', 3)
+          voiceBandThreshold: await window.electronAPI.getSetting('voice_band_threshold', 40) / 100, // 保持40%
+          highFreqThreshold: await window.electronAPI.getSetting('high_freq_threshold', 25) / 100, // 保持25%
+          silenceDuration: await window.electronAPI.getSetting('silence_duration', 800), // 800ms
+          voiceFramesRequired: await window.electronAPI.getSetting('voice_frames_required', 2) // 降低到2帧确认
         };
       }
-      // 默认值
-      setVoiceThreshold(20);
+      // 默认值 - 平衡灵敏度和防误触发
+      setVoiceThreshold(25);
       return {
-        volumeThreshold: 0.20,
-        voiceBandThreshold: 0.30,
-        highFreqThreshold: 0.15,
-        silenceDuration: 500,
-        voiceFramesRequired: 3
+        volumeThreshold: 0.25, // 调整到25%，适合正常语音
+        voiceBandThreshold: 0.40, // 保持40%
+        highFreqThreshold: 0.25, // 保持25%
+        silenceDuration: 800, // 800ms
+        voiceFramesRequired: 2 // 降低到2帧确认
       };
     } catch (error) {
       console.error("获取语音检测设置失败:", error);
-      setVoiceThreshold(20);
-      // 返回默认值
+      setVoiceThreshold(25);
+      // 返回平衡的默认值
       return {
-        volumeThreshold: 0.20,
-        voiceBandThreshold: 0.30,
-        highFreqThreshold: 0.15,
-        silenceDuration: 500,
-        voiceFramesRequired: 3
+        volumeThreshold: 0.25, // 调整到25%
+        voiceBandThreshold: 0.40, // 保持40%
+        highFreqThreshold: 0.25, // 保持25%
+        silenceDuration: 800, // 800ms
+        voiceFramesRequired: 2 // 降低到2帧确认
       };
     }
   }, []);
@@ -464,8 +464,8 @@ export default function App() {
         const hasVoiceBandCharacteristics = voiceBandRatio > voiceSettings.voiceBandThreshold;
         const hasHighFreqCharacteristics = highFreqRatio > voiceSettings.highFreqThreshold;
 
-        // 综合判断：必须同时满足音量、语音频段和频率特征
-        const isVoiceFeature = hasVolumeEnergy && hasVoiceBandCharacteristics && hasHighFreqCharacteristics;
+        // 简化触发条件：只需要满足音量和语音频段特征即可
+        const isVoiceFeature = hasVolumeEnergy && hasVoiceBandCharacteristics;
 
         // 更新语音活动状态
         if (isVoiceFeature) {
@@ -502,10 +502,10 @@ export default function App() {
 
         // ===== 录音触发逻辑 =====
 
-        const cooldown = 200; // 200ms冷却时间
+        const cooldown = 100; // 减少冷却时间到100ms
         const shouldStartRecording =
           vad.isVoiceDetected &&                              // 检测到语音特征
-          vad.consecutiveVoiceFrames >= voiceSettings.voiceFramesRequired && // 根据配置确认语音帧数
+          vad.consecutiveVoiceFrames >= 2 &&                  // 降低到2帧确认即可触发
           !isRecording &&                                     // 未在录音
           !isRecordingProcessing &&                           // 未在处理
           modelStatus.isReady &&                              // 模型就绪
@@ -529,7 +529,7 @@ export default function App() {
 
           console.log(`🎯 确认为真实语音！开始录音`);
           console.log(`📊 语音特征确认:`);
-          console.log(`   - 连续语音帧: ${vad.consecutiveVoiceFrames}/3帧 ✓`);
+          console.log(`   - 连续语音帧: ${vad.consecutiveVoiceFrames}/2帧 ✓`);
           console.log(`   - 音量特征: ${(normalizedVolume * 100).toFixed(1)}% ✓`);
           console.log(`   - 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% ✓`);
           console.log(`   - 高频特征: ${(highFreqRatio * 100).toFixed(1)}% ✓`);
