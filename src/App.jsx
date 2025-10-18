@@ -221,6 +221,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [voiceActivationEnabled, setVoiceActivationEnabled] = useState(false);
   const [currentVolume, setCurrentVolume] = useState(0);
+  const [voiceThreshold, setVoiceThreshold] = useState(20); // 存储当前音量阈值
   
   const { isDragging, handleMouseDown, handleMouseMove, handleMouseUp, handleClick } = useWindowDrag();
   const modelStatus = useModelStatus();
@@ -307,6 +308,44 @@ export default function App() {
   }, []);
 
   
+  // 获取语音检测设置
+  const getVoiceDetectionSettings = useCallback(async () => {
+    try {
+      if (window.electronAPI) {
+        const threshold = await window.electronAPI.getSetting('voice_threshold', 20);
+        setVoiceThreshold(threshold); // 更新UI显示的阈值
+
+        return {
+          volumeThreshold: threshold / 100, // 转换为小数
+          voiceBandThreshold: await window.electronAPI.getSetting('voice_band_threshold', 30) / 100,
+          highFreqThreshold: await window.electronAPI.getSetting('high_freq_threshold', 15) / 100,
+          silenceDuration: await window.electronAPI.getSetting('silence_duration', 500),
+          voiceFramesRequired: await window.electronAPI.getSetting('voice_frames_required', 3)
+        };
+      }
+      // 默认值
+      setVoiceThreshold(20);
+      return {
+        volumeThreshold: 0.20,
+        voiceBandThreshold: 0.30,
+        highFreqThreshold: 0.15,
+        silenceDuration: 500,
+        voiceFramesRequired: 3
+      };
+    } catch (error) {
+      console.error("获取语音检测设置失败:", error);
+      setVoiceThreshold(20);
+      // 返回默认值
+      return {
+        volumeThreshold: 0.20,
+        voiceBandThreshold: 0.30,
+        highFreqThreshold: 0.15,
+        silenceDuration: 500,
+        voiceFramesRequired: 3
+      };
+    }
+  }, []);
+
   // 智能语音活动检测函数
   const startVolumeMonitoring = useCallback(async () => {
     try {
@@ -327,6 +366,10 @@ export default function App() {
         }
         analyserRef.current = null;
       }
+
+      // 获取语音检测设置
+      const voiceSettings = await getVoiceDetectionSettings();
+      console.log("📋 加载语音检测配置:", voiceSettings);
 
       // 重置语音活动检测状态
       voiceActivityRef.current = {
@@ -414,17 +457,12 @@ export default function App() {
         }
         const highFreqRatio = highFreqEnergy / totalBandEnergy;
 
-        // ===== 智能语音检测逻辑 =====
+        // ===== 智能语音检测逻辑（使用动态配置） =====
 
-        // 基础音量阈值
-        const VOLUME_THRESHOLD = 0.20; // 20%基础音量阈值
-        const VOICE_BAND_THRESHOLD = 0.3; // 语音频段占比阈值
-        const HIGH_FREQ_THRESHOLD = 0.15; // 高频成分阈值
-
-        // 判断是否为语音特征
-        const hasVolumeEnergy = normalizedVolume > VOLUME_THRESHOLD;
-        const hasVoiceBandCharacteristics = voiceBandRatio > VOICE_BAND_THRESHOLD;
-        const hasHighFreqCharacteristics = highFreqRatio > HIGH_FREQ_THRESHOLD;
+        // 使用动态配置判断是否为语音特征
+        const hasVolumeEnergy = normalizedVolume > voiceSettings.volumeThreshold;
+        const hasVoiceBandCharacteristics = voiceBandRatio > voiceSettings.voiceBandThreshold;
+        const hasHighFreqCharacteristics = highFreqRatio > voiceSettings.highFreqThreshold;
 
         // 综合判断：必须同时满足音量、语音频段和频率特征
         const isVoiceFeature = hasVolumeEnergy && hasVoiceBandCharacteristics && hasHighFreqCharacteristics;
@@ -439,21 +477,21 @@ export default function App() {
             vad.isVoiceDetected = true;
             vad.voiceStartTime = now;
             console.log(`🗣️ 检测到语音开始！`);
-            console.log(`   - 音量: ${(normalizedVolume * 100).toFixed(1)}% > ${(VOLUME_THRESHOLD * 100).toFixed(0)}%`);
-            console.log(`   - 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% > ${(VOICE_BAND_THRESHOLD * 100).toFixed(0)}%`);
-            console.log(`   - 高频成分: ${(highFreqRatio * 100).toFixed(1)}% > ${(HIGH_FREQ_THRESHOLD * 100).toFixed(0)}%`);
+            console.log(`   - 音量: ${(normalizedVolume * 100).toFixed(1)}% > ${(voiceSettings.volumeThreshold * 100).toFixed(0)}%`);
+            console.log(`   - 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% > ${(voiceSettings.voiceBandThreshold * 100).toFixed(0)}%`);
+            console.log(`   - 高频成分: ${(highFreqRatio * 100).toFixed(1)}% > ${(voiceSettings.highFreqThreshold * 100).toFixed(0)}%`);
           }
         } else {
           vad.consecutiveSilenceFrames++;
 
-          if (vad.consecutiveSilenceFrames >= 5) { // 连续5帧（约500ms）静音
+          if (vad.consecutiveSilenceFrames >= Math.ceil(voiceSettings.silenceDuration / 100)) { // 根据配置的静音持续时间计算帧数
             if (vad.isVoiceDetected) {
               vad.isVoiceDetected = false;
               const speechDuration = now - vad.voiceStartTime;
               console.log(`🔇 语音结束，持续时长: ${(speechDuration / 1000).toFixed(1)}秒`);
 
               // 如果语音持续时间少于0.5秒，可能是误触发
-              if (speechDuration < 500) {
+              if (speechDuration < voiceSettings.silenceDuration) {
                 console.log(`⚠️ 语音时长过短(${speechDuration}ms)，可能是误触发，忽略`);
                 vad.consecutiveVoiceFrames = 0;
                 vad.consecutiveSilenceFrames = 0;
@@ -467,7 +505,7 @@ export default function App() {
         const cooldown = 200; // 200ms冷却时间
         const shouldStartRecording =
           vad.isVoiceDetected &&                              // 检测到语音特征
-          vad.consecutiveVoiceFrames >= 3 &&                  // 连续3帧确认语音（约300ms）
+          vad.consecutiveVoiceFrames >= voiceSettings.voiceFramesRequired && // 根据配置确认语音帧数
           !isRecording &&                                     // 未在录音
           !isRecordingProcessing &&                           // 未在处理
           modelStatus.isReady &&                              // 模型就绪
@@ -580,6 +618,17 @@ export default function App() {
       toast.info("💡 检测真实语音特征，过滤背景噪音");
     }
   }, [voiceActivationEnabled, startVolumeMonitoring, stopVolumeMonitoring]);
+
+  // 监听设置变化，重新加载语音检测参数
+  useEffect(() => {
+    if (voiceActivationEnabled && modelStatus.isReady) {
+      const reloadSettings = async () => {
+        await getVoiceDetectionSettings();
+        console.log("🔄 语音检测设置已重新加载");
+      };
+      reloadSettings();
+    }
+  }, [voiceActivationEnabled, modelStatus.isReady, getVoiceDetectionSettings]);
 
   // 监听录音状态变化，处理语音激活恢复
   useEffect(() => {
@@ -996,16 +1045,16 @@ export default function App() {
                   {/* 显示当前音量指示器 */}
                   {voiceActivationEnabled && (
                     <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-10 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden relative">
-                      {/* 20%基础阈值线 */}
+                      {/* 动态阈值线 */}
                       <div
                         className="absolute top-0 bottom-0 w-0.5 bg-yellow-500 z-10"
-                        style={{ left: '20%' }}
-                        title="语音检测阈值: 20%"
+                        style={{ left: `${voiceThreshold}%` }}
+                        title={`语音检测阈值: ${voiceThreshold}%`}
                       ></div>
                       {/* 当前音量显示 */}
                       <div
                         className={`h-full transition-all duration-100 ${
-                          currentVolume > 0.20 ? 'bg-emerald-500' : 'bg-gray-400'
+                          currentVolume > (voiceThreshold / 100) ? 'bg-emerald-500' : 'bg-gray-400'
                         }`}
                         style={{ width: `${Math.min(currentVolume * 100, 100)}%` }}
                       ></div>
@@ -1090,7 +1139,7 @@ export default function App() {
             ) : micState === "optimizing" ? (
               "AI正在优化文本，请稍候..."
             ) : voiceActivationEnabled ? (
-              `智能语音检测已启用 | 音量: ${(currentVolume * 100).toFixed(1)}% | 状态: 👂 监听中`
+              `智能语音检测已启用 | 音量: ${(currentVolume * 100).toFixed(1)}% | 阈值: ${voiceThreshold}% | 状态: 👂 监听中`
             ) : (
               `点击麦克风或按 ${hotkey} 开始录音`
             )}

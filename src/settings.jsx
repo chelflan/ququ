@@ -11,7 +11,13 @@ const SettingsPage = () => {
     ai_api_key: "",
     ai_base_url: "https://api.openai.com/v1",
     ai_model: "gpt-3.5-turbo",
-    enable_ai_optimization: true
+    enable_ai_optimization: true,
+    // 语音检测参数
+    voice_threshold: 20,
+    voice_band_threshold: 30,
+    high_freq_threshold: 15,
+    silence_duration: 500,
+    voice_frames_required: 3
   });
   
   const [customModel, setCustomModel] = useState(false);
@@ -51,7 +57,13 @@ const SettingsPage = () => {
           ai_api_key: allSettings.ai_api_key || "",
           ai_base_url: allSettings.ai_base_url || "https://api.openai.com/v1",
           ai_model: allSettings.ai_model || "gpt-3.5-turbo",
-          enable_ai_optimization: allSettings.enable_ai_optimization !== false // 默认为true
+          enable_ai_optimization: allSettings.enable_ai_optimization !== false, // 默认为true
+          // 语音检测参数
+          voice_threshold: allSettings.voice_threshold || 20,
+          voice_band_threshold: allSettings.voice_band_threshold || 30,
+          high_freq_threshold: allSettings.high_freq_threshold || 15,
+          silence_duration: allSettings.silence_duration || 500,
+          voice_frames_required: allSettings.voice_frames_required || 3
         };
         setSettings(prev => ({ ...prev, ...loadedSettings }));
         
@@ -77,6 +89,13 @@ const SettingsPage = () => {
         await window.electronAPI.setSetting('ai_base_url', settings.ai_base_url);
         await window.electronAPI.setSetting('ai_model', settings.ai_model);
         await window.electronAPI.setSetting('enable_ai_optimization', settings.enable_ai_optimization);
+
+        // 保存语音检测参数
+        await window.electronAPI.setSetting('voice_threshold', settings.voice_threshold);
+        await window.electronAPI.setSetting('voice_band_threshold', settings.voice_band_threshold);
+        await window.electronAPI.setSetting('high_freq_threshold', settings.high_freq_threshold);
+        await window.electronAPI.setSetting('silence_duration', settings.silence_duration);
+        await window.electronAPI.setSetting('voice_frames_required', settings.voice_frames_required);
         
         toast.success("设置保存成功");
       }
@@ -241,6 +260,133 @@ const SettingsPage = () => {
                   onRequest={testAccessibilityPermission}
                   buttonText="测试权限"
                 />
+              </div>
+            </div>
+          </div>
+
+          {/* 语音检测配置部分 */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700">
+            <div className="p-6">
+              <div className="mb-4">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 chinese-title">
+                  语音检测配置
+                </h2>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                  调整智能语音检测参数，优化录音触发和停止的灵敏度。
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {/* 音量阈值 */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    音量阈值: {settings.voice_threshold}%
+                  </label>
+                  <input
+                    type="range"
+                    min="5"
+                    max="50"
+                    value={settings.voice_threshold}
+                    onChange={(e) => handleInputChange('voice_threshold', parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span>5% (敏感)</span>
+                    <span>50% (迟钝)</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    触发录音的最低音量，数值越低越敏感
+                  </p>
+                </div>
+
+                {/* 语音频段阈值 */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    语音频段阈值: {settings.voice_band_threshold}%
+                  </label>
+                  <input
+                    type="range"
+                    min="10"
+                    max="60"
+                    value={settings.voice_band_threshold}
+                    onChange={(e) => handleInputChange('voice_band_threshold', parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span>10% (宽松)</span>
+                    <span>60% (严格)</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    人声频段能量占比，用于区分语音和噪音
+                  </p>
+                </div>
+
+                {/* 高频成分阈值 */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    高频成分阈值: {settings.high_freq_threshold}%
+                  </label>
+                  <input
+                    type="range"
+                    min="5"
+                    max="30"
+                    value={settings.high_freq_threshold}
+                    onChange={(e) => handleInputChange('high_freq_threshold', parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span>5% (宽松)</span>
+                    <span>30% (严格)</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    高频成分能量占比，语音比噪音有更多高频特征
+                  </p>
+                </div>
+
+                {/* 静音持续时间 */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    静音持续时间: {settings.silence_duration}ms
+                  </label>
+                  <input
+                    type="range"
+                    min="200"
+                    max="2000"
+                    step="100"
+                    value={settings.silence_duration}
+                    onChange={(e) => handleInputChange('silence_duration', parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span>200ms (快速)</span>
+                    <span>2000ms (缓慢)</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    检测到静音后自动停止录音的等待时间
+                  </p>
+                </div>
+
+                {/* 确认帧数 */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    确认帧数: {settings.voice_frames_required}
+                  </label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    value={settings.voice_frames_required}
+                    onChange={(e) => handleInputChange('voice_frames_required', parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span>1帧 (敏感)</span>
+                    <span>10帧 (稳定)</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    连续检测到语音的帧数才触发录音，提高稳定性
+                  </p>
+                </div>
               </div>
             </div>
           </div>

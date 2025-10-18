@@ -34,11 +34,27 @@ export const useRecording = () => {
   const modelStatus = useModelStatus();
 
   // 启动声音结束检测
-  const startSilenceDetection = useCallback(() => {
+  const startSilenceDetection = useCallback(async () => {
     if (!streamRef.current || audioContextRef.current) return;
 
     try {
       console.log("🔇 启动声音结束检测");
+
+      // 获取语音检测设置
+      let silenceThreshold = 0.08; // 默认8%
+      let silenceDuration = 500; // 默认500ms
+
+      if (window.electronAPI) {
+        try {
+          const threshold = await window.electronAPI.getSetting('voice_threshold', 20);
+          const duration = await window.electronAPI.getSetting('silence_duration', 500);
+          silenceThreshold = threshold / 100; // 转换为小数
+          silenceDuration = duration;
+          console.log(`📋 加载静音检测配置: 阈值${(silenceThreshold * 100).toFixed(0)}%, 持续${silenceDuration}ms`);
+        } catch (error) {
+          console.error("获取静音检测设置失败，使用默认值:", error);
+        }
+      }
 
       // 创建音频上下文和分析器
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -60,9 +76,6 @@ export const useRecording = () => {
         checkInterval: null
       };
 
-      const SILENCE_THRESHOLD = 0.08; // 8%音量阈值，用于检测静音（与App.jsx中的VOLUME_THRESHOLD保持一致）
-      const SILENCE_DURATION = 500; // 0.5秒静音后立即开始识别（更快的响应）
-
       // 音量监测循环
       const monitorVolume = () => {
         if (!analyserRef.current) return;
@@ -75,12 +88,12 @@ export const useRecording = () => {
         const normalizedVolume = average / 255; // 归一化到0-1
         const volumePercent = (normalizedVolume * 100).toFixed(1);
 
-        const isBelowThreshold = normalizedVolume < SILENCE_THRESHOLD;
+        const isBelowThreshold = normalizedVolume < silenceThreshold;
         const now = Date.now();
 
         // 每500毫秒记录一次音量状态
         if (now % 500 < 100) {
-          console.log(`🔇 录音音量监测: ${volumePercent}% | 阈值: ${(SILENCE_THRESHOLD * 100).toFixed(0)}% | 状态: ${
+          console.log(`🔇 录音音量监测: ${volumePercent}% | 阈值: ${(silenceThreshold * 100).toFixed(0)}% | 状态: ${
             isBelowThreshold ? '静音' : '有声音'
           }`);
         }
@@ -91,15 +104,15 @@ export const useRecording = () => {
             // 刚进入静音状态
             silenceDetectorRef.current.silenceStartTime = now;
             silenceDetectorRef.current.isBelowThreshold = true;
-            console.log(`🔇 检测到静音开始 (${volumePercent}% < ${(SILENCE_THRESHOLD * 100).toFixed(0)}%)`);
+            console.log(`🔇 检测到静音开始 (${volumePercent}% < ${(silenceThreshold * 100).toFixed(0)}%)`);
           } else if (silenceDetectorRef.current.silenceStartTime &&
-                     (now - silenceDetectorRef.current.silenceStartTime) >= SILENCE_DURATION) {
+                     (now - silenceDetectorRef.current.silenceStartTime) >= silenceDuration) {
             // 静音持续时间足够，自动停止录音
-            console.log(`🏁 静音超过${SILENCE_DURATION}ms，自动停止录音`);
+            console.log(`🏁 静音超过${silenceDuration}ms，自动停止录音`);
             console.log(`📊 静音检测统计:`);
             console.log(`   - 静音时长: ${now - silenceDetectorRef.current.silenceStartTime}ms`);
             console.log(`   - 音量: ${volumePercent}%`);
-            console.log(`   - 阈值: ${(SILENCE_THRESHOLD * 100).toFixed(0)}%`);
+            console.log(`   - 阈值: ${(silenceThreshold * 100).toFixed(0)}%`);
 
             stopSilenceDetection();
             // 直接停止MediaRecorder，避免递归调用stopRecording
@@ -112,7 +125,7 @@ export const useRecording = () => {
           // 当前有声音，重置静音检测
           if (silenceDetectorRef.current.isBelowThreshold) {
             const silenceDuration = now - (silenceDetectorRef.current.silenceStartTime || now);
-            console.log(`🎤 声音恢复 (${volumePercent}% >= ${(SILENCE_THRESHOLD * 100).toFixed(0)}%)，静音时长: ${silenceDuration}ms`);
+            console.log(`🎤 声音恢复 (${volumePercent}% >= ${(silenceThreshold * 100).toFixed(0)}%)，静音时长: ${silenceDuration}ms`);
           }
 
           silenceDetectorRef.current.silenceStartTime = null;
