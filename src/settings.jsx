@@ -16,7 +16,7 @@ const SettingsPage = () => {
     voice_threshold: 25,
     voice_band_threshold: 40,
     high_freq_threshold: 25,
-    silence_duration: 800,
+    silence_duration: 2000, // 增加到2秒，避免过早停止
     voice_frames_required: 2
   });
   

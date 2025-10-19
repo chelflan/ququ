@@ -272,6 +272,78 @@ export default function App() {
     silenceStartTime: null
   });
 
+  // 预录音缓冲区相关引用
+  const preRecordBufferRef = useRef({
+    isActive: false,
+    audioBuffer: [],
+    maxDuration: 2000, // 2秒预录音缓冲
+    sampleRate: 16000,
+    channelCount: 1,
+    startTime: null,
+    workletNode: null,
+    processor: null
+  });
+
+  // 环形音频缓冲区类
+  class CircularAudioBuffer {
+    constructor(maxDuration, sampleRate, channelCount = 1) {
+      this.maxDuration = maxDuration;
+      this.sampleRate = sampleRate;
+      this.channelCount = channelCount;
+      this.maxSamples = Math.floor(maxDuration * sampleRate / 1000);
+      this.buffer = new Float32Array(this.maxSamples * channelCount);
+      this.writeIndex = 0;
+      this.readIndex = 0;
+      this.isFull = false;
+      this.currentDuration = 0;
+    }
+
+    write(audioData) {
+      const samplesToWrite = audioData.length;
+      const samplesToWriteClamped = Math.min(samplesToWrite, this.maxSamples);
+
+      for (let i = 0; i < samplesToWriteClamped; i++) {
+        this.buffer[this.writeIndex * this.channelCount] = audioData[i];
+        this.writeIndex = (this.writeIndex + 1) % this.maxSamples;
+        if (this.writeIndex === this.readIndex) {
+          this.isFull = true;
+        }
+      }
+
+      // 更新当前音频时长
+      const totalSamples = this.isFull ? this.maxSamples : this.writeIndex;
+      this.currentDuration = (totalSamples / this.sampleRate) * 1000;
+    }
+
+    getRecentAudio(durationMs) {
+      const samplesToRead = Math.floor(durationMs * this.sampleRate / 1000);
+      const samplesToReadClamped = Math.min(samplesToRead, this.currentDuration * this.sampleRate / 1000);
+
+      if (samplesToReadClamped === 0) return new Float32Array(0);
+
+      const result = new Float32Array(samplesToReadClamped);
+
+      for (let i = 0; i < samplesToReadClamped; i++) {
+        const readIndex = (this.readIndex + i) % this.maxSamples;
+        result[i] = this.buffer[readIndex * this.channelCount];
+      }
+
+      return result;
+    }
+
+    clear() {
+      this.buffer.fill(0);
+      this.writeIndex = 0;
+      this.readIndex = 0;
+      this.isFull = false;
+      this.currentDuration = 0;
+    }
+
+    getCurrentDuration() {
+      return this.currentDuration;
+    }
+  }
+
   // 安全粘贴函数
   const safePaste = useCallback(async (text) => {
     const now = Date.now();
@@ -346,7 +418,7 @@ export default function App() {
     }
   }, []);
 
-  // 智能语音活动检测函数
+  // 智能语音活动检测函数 - 修改为持续监听模式，使用预录音缓冲
   const startVolumeMonitoring = useCallback(async () => {
     try {
       // 先停止现有的音量监测（避免重复启动）
@@ -408,8 +480,31 @@ export default function App() {
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
 
-      console.log("🎤 智能语音活动检测已启动");
-      console.log("🎯 目标：检测真实语音特征，而非简单音量阈值");
+      // 初始化预录音缓冲区 - 保存2秒的音频数据
+      const preRecordDuration = 2000; // 2秒预录音
+      preRecordBufferRef.current = new CircularAudioBuffer(
+        preRecordDuration,
+        16000, // 16kHz采样率
+        1 // 单声道
+      );
+
+      // 创建脚本处理器来捕获原始音频数据
+      const bufferSize = 4096;
+      const scriptProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+      scriptProcessor.onaudioprocess = (event) => {
+        const inputBuffer = event.inputBuffer;
+        const inputData = inputBuffer.getChannelData(0);
+
+        // 将音频数据写入预录音缓冲区
+        preRecordBufferRef.current.write(inputData);
+      };
+
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+
+      console.log("🎤 持续语音监听已启动（带预录音缓冲）");
+      console.log("🎯 目标：检测真实语音特征，预录音缓冲区已初始化");
 
       // 语音活动检测循环
       const detectVoiceActivity = () => {
@@ -480,6 +575,7 @@ export default function App() {
             console.log(`   - 音量: ${(normalizedVolume * 100).toFixed(1)}% > ${(voiceSettings.volumeThreshold * 100).toFixed(0)}%`);
             console.log(`   - 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% > ${(voiceSettings.voiceBandThreshold * 100).toFixed(0)}%`);
             console.log(`   - 高频成分: ${(highFreqRatio * 100).toFixed(1)}% > ${(voiceSettings.highFreqThreshold * 100).toFixed(0)}%`);
+            console.log(`   - 预录音缓冲: ${(preRecordBufferRef.current.getCurrentDuration() / 1000).toFixed(1)}s`);
           }
         } else {
           vad.consecutiveSilenceFrames++;
@@ -520,23 +616,29 @@ export default function App() {
           const volumePercent = (normalizedVolume * 100).toFixed(1);
           const voiceStatus = vad.isVoiceDetected ? '🗣️ 语音' : '👂 监听';
           const consecutiveInfo = `🔊${vad.consecutiveVoiceFrames} 🔇${vad.consecutiveSilenceFrames}`;
-          console.log(`🎯 智能检测: ${volumePercent}% | 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% | 高频: ${(highFreqRatio * 100).toFixed(1)}% | ${voiceStatus} | ${consecutiveInfo} | 录音: ${isRecording ? '●' : '○'}`);
+          const preRecordInfo = `预录音: ${(preRecordBufferRef.current.getCurrentDuration() / 1000).toFixed(1)}s`;
+          console.log(`🎯 持续检测: ${volumePercent}% | 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% | 高频: ${(highFreqRatio * 100).toFixed(1)}% | ${voiceStatus} | ${consecutiveInfo} | ${preRecordInfo} | 录音: ${isRecording ? '●' : '○'}`);
         }
 
         if (shouldStartRecording) {
           volumeCheckRef.current.lastTrigger = now;
           volumeCheckRef.current.isProcessing = true;
 
-          console.log(`🎯 确认为真实语音！开始录音`);
+          console.log(`🎯 确认为真实语音！开始录音（包含预录音数据）`);
           console.log(`📊 语音特征确认:`);
           console.log(`   - 连续语音帧: ${vad.consecutiveVoiceFrames}/2帧 ✓`);
           console.log(`   - 音量特征: ${(normalizedVolume * 100).toFixed(1)}% ✓`);
           console.log(`   - 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% ✓`);
           console.log(`   - 高频特征: ${(highFreqRatio * 100).toFixed(1)}% ✓`);
+          console.log(`   - 预录音时长: ${(preRecordBufferRef.current.getCurrentDuration() / 1000).toFixed(1)}s ✓`);
 
-          toast.success(`🎤 检测到语音，开始录音`);
+          toast.success(`🎤 检测到语音，开始录音（包含预录音）`);
 
-          // 停止语音活动检测
+          // 获取预录音数据
+          const preRecordAudio = preRecordBufferRef.current.getRecentAudio(preRecordDuration);
+          console.log(`📼 预录音数据: ${preRecordAudio.length} 采样点`);
+
+          // 停止语音活动检测，但保持音频流用于预录音缓冲
           if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
             animationFrameRef.current = null;
@@ -548,8 +650,8 @@ export default function App() {
           analyserRef.current = null;
           setCurrentVolume(0);
 
-          // 开始录音
-          startRecording();
+          // 启动带预录音数据的自动录音
+          startRecording(preRecordAudio, true); // 自动模式，启用静音检测
 
           // 1秒后重置处理状态
           setTimeout(() => {
@@ -565,12 +667,12 @@ export default function App() {
       detectVoiceActivity();
 
     } catch (error) {
-      console.error("智能语音活动检测启动失败:", error);
+      console.error("持续语音监听启动失败:", error);
       toast.error("无法启动语音检测");
     }
-  }, [isRecording, isRecordingProcessing, modelStatus.isReady, startRecording]);
+  }, [isRecording, isRecordingProcessing, modelStatus.isReady, startRecording, getVoiceDetectionSettings]);
 
-  // 停止音量监测
+  // 停止音量监测 - 优化资源清理
   const stopVolumeMonitoring = useCallback(() => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -602,7 +704,12 @@ export default function App() {
       silenceStartTime: null
     };
 
-    console.log("⏹️ 智能语音检测已停止");
+    // 清理预录音缓冲区以释放内存
+    if (preRecordBufferRef.current && typeof preRecordBufferRef.current.clear === 'function') {
+      preRecordBufferRef.current.clear();
+    }
+
+    console.log("⏹️ 持续语音检测已停止，资源已清理");
   }, []);
 
   // 切换语音激活模式
@@ -650,10 +757,14 @@ export default function App() {
     }
   }, [isRecording, isRecordingProcessing, voiceActivationEnabled, modelStatus.isReady, startVolumeMonitoring, stopVolumeMonitoring]);
 
-  // 清理音量监测资源
+  // 清理音量监测资源 - 防止内存泄漏
   useEffect(() => {
     return () => {
       stopVolumeMonitoring();
+      // 确保所有音频资源都被正确清理
+      if (preRecordBufferRef.current) {
+        preRecordBufferRef.current = null;
+      }
     };
   }, [stopVolumeMonitoring]);
 
@@ -813,7 +924,7 @@ export default function App() {
     }
 
     if (!isRecording && !isRecordingProcessing) {
-      startRecording();
+      startRecording(null, false); // 手动模式，不启用静音检测
     } else if (isRecording) {
       stopRecording();
     }

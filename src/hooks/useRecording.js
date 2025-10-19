@@ -38,16 +38,16 @@ export const useRecording = () => {
     if (!streamRef.current || audioContextRef.current) return;
 
     try {
-      console.log("🔇 启动声音结束检测");
+      console.log("🔇 启动声音结束检测（针对语音识别优化）");
 
-      // 获取语音检测设置
-      let silenceThreshold = 0.08; // 默认8%
-      let silenceDuration = 500; // 默认500ms
+      // 获取语音检测设置 - 调整为更适合语音识别的参数
+      let silenceThreshold = 0.05; // 降低到5%，避免误判正常的语音停顿
+      let silenceDuration = 2000; // 增加到2秒，给用户更充分的说话时间
 
       if (window.electronAPI) {
         try {
           const threshold = await window.electronAPI.getSetting('voice_threshold', 20);
-          const duration = await window.electronAPI.getSetting('silence_duration', 500);
+          const duration = await window.electronAPI.getSetting('silence_duration', 2000); // 默认2秒
           silenceThreshold = threshold / 100; // 转换为小数
           silenceDuration = duration;
           console.log(`📋 加载静音检测配置: 阈值${(silenceThreshold * 100).toFixed(0)}%, 持续${silenceDuration}ms`);
@@ -76,7 +76,7 @@ export const useRecording = () => {
         checkInterval: null
       };
 
-      // 音量监测循环
+      // 音量监测循环 - 增加更严格的静音检测逻辑
       const monitorVolume = () => {
         if (!analyserRef.current) return;
 
@@ -91,11 +91,13 @@ export const useRecording = () => {
         const isBelowThreshold = normalizedVolume < silenceThreshold;
         const now = Date.now();
 
-        // 每500毫秒记录一次音量状态
-        if (now % 500 < 100) {
-          console.log(`🔇 录音音量监测: ${volumePercent}% | 阈值: ${(silenceThreshold * 100).toFixed(0)}% | 状态: ${
-            isBelowThreshold ? '静音' : '有声音'
-          }`);
+        // 每1秒记录一次音量状态，减少日志频率
+        if (now % 1000 < 100) {
+          const status = isBelowThreshold ? '🔇 静音' : '🎤 有声音';
+          const silenceInfo = silenceDetectorRef.current.silenceStartTime
+            ? `静音时长: ${now - silenceDetectorRef.current.silenceStartTime}ms`
+            : '无静音检测';
+          console.log(`🔇 录音音量监测: ${volumePercent}% | 阈值: ${(silenceThreshold * 100).toFixed(0)}% | ${status} | ${silenceInfo}`);
         }
 
         if (isBelowThreshold) {
@@ -108,16 +110,28 @@ export const useRecording = () => {
           } else if (silenceDetectorRef.current.silenceStartTime &&
                      (now - silenceDetectorRef.current.silenceStartTime) >= silenceDuration) {
             // 静音持续时间足够，自动停止录音
+            const totalSilenceTime = now - silenceDetectorRef.current.silenceStartTime;
             console.log(`🏁 静音超过${silenceDuration}ms，自动停止录音`);
             console.log(`📊 静音检测统计:`);
-            console.log(`   - 静音时长: ${now - silenceDetectorRef.current.silenceStartTime}ms`);
-            console.log(`   - 音量: ${volumePercent}%`);
-            console.log(`   - 阈值: ${(silenceThreshold * 100).toFixed(0)}%`);
+            console.log(`   - 静音时长: ${totalSilenceTime}ms (要求: ${silenceDuration}ms)`);
+            console.log(`   - 音量: ${volumePercent}% (阈值: ${(silenceThreshold * 100).toFixed(0)}%)`);
 
-            stopSilenceDetection();
-            // 直接停止MediaRecorder，避免递归调用stopRecording
-            if (mediaRecorderRef.current) {
-              mediaRecorderRef.current.stop();
+            // 额外的安全检查：确保录音时间不少于1秒，避免误触发
+            const recordingStartTime = Date.now() - (mediaRecorderRef.current?.startTime || Date.now());
+            const minRecordingTime = 1000; // 最少录音1秒
+
+            if (recordingStartTime >= minRecordingTime) {
+              console.log(`✅ 录音时长检查通过 (${recordingStartTime}ms >= ${minRecordingTime}ms)，可以停止录音`);
+              stopSilenceDetection();
+              // 直接停止MediaRecorder，避免递归调用stopRecording
+              if (mediaRecorderRef.current) {
+                mediaRecorderRef.current.stop();
+              }
+            } else {
+              console.log(`⚠️ 录音时间过短 (${recordingStartTime}ms < ${minRecordingTime}ms)，继续录音`);
+              // 重置静音检测，继续录音
+              silenceDetectorRef.current.silenceStartTime = now;
+              silenceDetectorRef.current.isBelowThreshold = false;
             }
             return;
           }
@@ -171,8 +185,8 @@ export const useRecording = () => {
     };
   }, []);
 
-  // 开始录音
-  const startRecording = useCallback(async () => {
+  // 开始录音 - 支持预录音数据和模式区分
+  const startRecording = useCallback(async (preRecordAudioData = null, isAutoMode = false) => {
     try {
       setError(null);
 
@@ -192,6 +206,14 @@ export const useRecording = () => {
         throw new Error('您的浏览器不支持录音功能');
       }
 
+      // 保存预录音数据（如果有）
+      if (preRecordAudioData) {
+        console.log("📼 接收到预录音数据:", preRecordAudioData.length, "采样点");
+        audioChunksRef.current = { preRecord: preRecordAudioData, recorded: [] };
+      } else {
+        audioChunksRef.current = [];
+      }
+
       // 请求麦克风权限
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -204,7 +226,6 @@ export const useRecording = () => {
       });
 
       streamRef.current = stream;
-      audioChunksRef.current = [];
 
       // 创建MediaRecorder
       const mediaRecorder = new MediaRecorder(stream, {
@@ -212,11 +233,17 @@ export const useRecording = () => {
       });
 
       mediaRecorderRef.current = mediaRecorder;
+      // 记录录音开始时间，用于计算录音时长
+      mediaRecorder.startTime = Date.now();
 
       // 设置事件处理器
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+          if (audioChunksRef.current.preRecord) {
+            audioChunksRef.current.recorded.push(event.data);
+          } else {
+            audioChunksRef.current.push(event.data);
+          }
         }
       };
 
@@ -226,14 +253,15 @@ export const useRecording = () => {
 
         try {
           // 创建音频Blob
-          const audioBlob = new Blob(audioChunksRef.current, {
-            type: 'audio/webm;codecs=opus'
-          });
+          const recordedBlob = new Blob(
+            audioChunksRef.current.preRecord ? audioChunksRef.current.recorded : audioChunksRef.current,
+            { type: 'audio/webm;codecs=opus' }
+          );
 
-          setAudioData(audioBlob);
+          setAudioData(recordedBlob);
 
-          // 处理音频
-          await processAudio(audioBlob);
+          // 处理音频（包含预录音数据）
+          await processAudio(recordedBlob, audioChunksRef.current.preRecord);
         } catch (err) {
           setError(`音频处理失败: ${err.message}`);
         } finally {
@@ -251,10 +279,17 @@ export const useRecording = () => {
       mediaRecorder.start(1000); // 每秒收集一次数据
       setIsRecording(true);
 
-      // 启动声音结束检测
-      setTimeout(() => {
-        startSilenceDetection();
-      }, 200); // 延迟200ms启动检测，避免立即检测到静音
+      console.log(`🎤 开始${isAutoMode ? '自动' : '手动'}录音${preRecordAudioData ? '（包含预录音数据）' : ''}`);
+
+      // 只有在自动模式下才启动声音结束检测
+      if (isAutoMode) {
+        setTimeout(() => {
+          startSilenceDetection();
+        }, 200); // 延迟200ms启动检测，避免立即检测到静音
+        console.log("🔇 自动模式：已启用静音检测");
+      } else {
+        console.log("🎯 手动模式：录音将持续直到用户手动停止");
+      }
 
     } catch (err) {
       setError(`无法开始录音: ${err.message}`);
@@ -278,12 +313,21 @@ export const useRecording = () => {
     }
   }, [isRecording, stopSilenceDetection]);
 
-  // 处理音频
-  const processAudio = useCallback(async (audioBlob) => {
+  // 处理音频 - 支持预录音数据合并
+  const processAudio = useCallback(async (audioBlob, preRecordAudioData = null) => {
     processingRef.current.isProcessingAudio = true;
-    
+
     try {
-      const wavBlob = await convertToWav(audioBlob);
+      let finalAudioBlob = audioBlob;
+
+      // 如果有预录音数据，需要合并音频
+      if (preRecordAudioData && preRecordAudioData.length > 0) {
+        console.log("🔄 开始合并预录音和实际录音数据");
+        finalAudioBlob = await mergeAudioData(preRecordAudioData, audioBlob);
+        console.log("✅ 音频合并完成");
+      }
+
+      const wavBlob = await convertToWav(finalAudioBlob);
 
       if (window.electronAPI) {
         const arrayBuffer = await wavBlob.arrayBuffer();
@@ -293,7 +337,7 @@ export const useRecording = () => {
 
         if (transcriptionResult.success) {
           const raw_text = transcriptionResult.text;
-          
+
           // 准备转录数据
           const transcriptionData = {
             raw_text: raw_text,
@@ -302,11 +346,12 @@ export const useRecording = () => {
             language: transcriptionResult.language || 'zh-CN',
             duration: transcriptionResult.duration || 0,
             file_size: uint8Array.length,
+            has_pre_record: !!preRecordAudioData, // 标记是否包含预录音
           };
 
           // 立即显示初步结果
           if (window.onTranscriptionComplete) {
-            window.onTranscriptionComplete({ ...transcriptionResult, enhanced_by_ai: false });
+            window.onTranscriptionComplete({ ...transcriptionResult, enhanced_by_ai: false, has_pre_record: !!preRecordAudioData });
           }
 
           // 异步处理AI优化和保存（只保存一次）
@@ -323,7 +368,7 @@ export const useRecording = () => {
                   if (window.electronAPI && window.electronAPI.log) {
                     window.electronAPI.log('info', '开始AI文本优化:', raw_text.substring(0, 50) + '...');
                   }
-                  
+
                   const result = await window.electronAPI.processText(raw_text, 'optimize');
 
                   if (result && result.success) {
@@ -366,6 +411,7 @@ export const useRecording = () => {
                     text: finalData.processed_text,
                     processed_text: finalData.processed_text,
                     enhanced_by_ai: true,
+                    has_pre_record: !!preRecordAudioData,
                   };
                   if (window.onAIOptimizationComplete) {
                     window.onAIOptimizationComplete(enhancedResult);
@@ -376,6 +422,7 @@ export const useRecording = () => {
                     ...transcriptionResult,
                     text: raw_text,
                     enhanced_by_ai: false,
+                    has_pre_record: !!preRecordAudioData,
                   };
                   if (window.onAIOptimizationComplete) {
                     window.onAIOptimizationComplete(finalResult);
@@ -391,20 +438,69 @@ export const useRecording = () => {
             }
           }, 100);
 
-          return { ...transcriptionResult, enhanced_by_ai: false };
+          return { ...transcriptionResult, enhanced_by_ai: false, has_pre_record: !!preRecordAudioData };
         } else {
           throw new Error(transcriptionResult.error || '语音识别失败');
         }
       } else {
         // Web环境模拟
         const mockResult = { success: true, text: '模拟识别结果。', confidence: 0.95, duration: 3.5 };
-        if (window.onTranscriptionComplete) window.onTranscriptionComplete(mockResult);
-        return mockResult;
+        if (window.onTranscriptionComplete) window.onTranscriptionComplete({ ...mockResult, has_pre_record: !!preRecordAudioData });
+        return { ...mockResult, has_pre_record: !!preRecordAudioData };
       }
     } catch (err) {
       throw new Error(`音频处理失败: ${err.message}`);
     } finally {
       processingRef.current.isProcessingAudio = false;
+    }
+  }, []);
+
+  // 合并预录音数据和实际录音数据
+  const mergeAudioData = useCallback(async (preRecordFloat32Array, recordedBlob) => {
+    try {
+      console.log("🔄 开始音频合并...");
+      console.log(`   - 预录音数据: ${preRecordFloat32Array.length} 采样点 (${(preRecordFloat32Array.length / 16000).toFixed(2)}s)`);
+
+      // 解码实际录音数据
+      const recordedArrayBuffer = await recordedBlob.arrayBuffer();
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const recordedAudioBuffer = await audioContext.decodeAudioData(recordedArrayBuffer);
+
+      console.log(`   - 实际录音: ${recordedAudioBuffer.length} 采样点 (${(recordedAudioBuffer.length / 16000).toFixed(2)}s)`);
+
+      // 计算总长度
+      const totalLength = preRecordFloat32Array.length + recordedAudioBuffer.length;
+      console.log(`   - 合并后总长度: ${totalLength} 采样点 (${(totalLength / 16000).toFixed(2)}s)`);
+
+      // 创建新的AudioBuffer
+      const mergedBuffer = audioContext.createBuffer(1, totalLength, 16000);
+      const mergedChannelData = mergedBuffer.getChannelData(0);
+
+      // 复制预录音数据
+      for (let i = 0; i < preRecordFloat32Array.length; i++) {
+        mergedChannelData[i] = preRecordFloat32Array[i];
+      }
+
+      // 复制实际录音数据
+      const recordedChannelData = recordedAudioBuffer.getChannelData(0);
+      for (let i = 0; i < recordedAudioBuffer.length; i++) {
+        mergedChannelData[preRecordFloat32Array.length + i] = recordedChannelData[i];
+      }
+
+      // 转换为WAV格式
+      const wavBuffer = audioBufferToWav(mergedBuffer);
+      const mergedBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+
+      // 关闭AudioContext
+      audioContext.close();
+
+      console.log("✅ 音频合并完成");
+      return mergedBlob;
+
+    } catch (error) {
+      console.error("❌ 音频合并失败:", error);
+      // 如果合并失败，返回原始录音数据
+      return recordedBlob;
     }
   }, []);
 
