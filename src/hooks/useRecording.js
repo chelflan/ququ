@@ -407,54 +407,63 @@ export const useRecording = () => {
       let score = 0;
       let reasons = [];
 
-      // 音量评分 (30分)
-      if (rmsDb > -30) {
-        score += 30;
+      // 音量评分 (25分) - 更宽松的音量要求
+      if (rmsDb > -35) {
+        score += 25;
         reasons.push("音量充足");
-      } else if (rmsDb > -40) {
-        score += 20;
+      } else if (rmsDb > -45) {
+        score += 18;
         reasons.push("音量适中");
-      } else if (rmsDb > -50) {
+      } else if (rmsDb > -55) {
         score += 10;
         reasons.push("音量偏低");
       } else {
         reasons.push("音量过低");
       }
 
-      // 零交叉率评分 (25分) - 人声通常在500-2000次/秒
-      if (zcr > 500 && zcr < 2000) {
-        score += 25;
+      // 零交叉率评分 (30分) - 扩大人声范围，包括轻声说话
+      if (zcr > 300 && zcr < 2500) {
+        score += 30;
         reasons.push("零交叉率正常");
-      } else if (zcr > 200 && zcr < 3000) {
-        score += 15;
+      } else if (zcr > 150 && zcr < 3500) {
+        score += 20;
         reasons.push("零交叉率可接受");
+      } else if (zcr > 50 && zcr < 4000) {
+        score += 10;
+        reasons.push("零交叉率勉强");
       } else {
         reasons.push("零交叉率异常");
       }
 
-      // 频谱重心评分 (25分) - 人声通常在500-2000Hz
-      if (spectralCentroid > 500 && spectralCentroid < 2000) {
+      // 频谱重心评分 (25分) - 扩大人声频率范围
+      if (spectralCentroid > 400 && spectralCentroid < 2500) {
         score += 25;
         reasons.push("频谱重心合适");
-      } else if (spectralCentroid > 300 && spectralCentroid < 3000) {
-        score += 15;
+      } else if (spectralCentroid > 200 && spectralCentroid < 3500) {
+        score += 18;
         reasons.push("频谱重心可接受");
+      } else if (spectralCentroid > 100 && spectralCentroid < 4500) {
+        score += 10;
+        reasons.push("频谱重心勉强");
       } else {
         reasons.push("频谱重心异常");
       }
 
-      // 活动比例评分 (20分)
-      if (activityRatio > 0.5) {
+      // 活动比例评分 (20分) - 降低活动比例要求
+      if (activityRatio > 0.3) {
         score += 20;
         reasons.push("音频活动充分");
-      } else if (activityRatio > 0.3) {
-        score += 10;
+      } else if (activityRatio > 0.2) {
+        score += 12;
         reasons.push("音频活动一般");
+      } else if (activityRatio > 0.1) {
+        score += 5;
+        reasons.push("音频活动较少");
       } else {
         reasons.push("音频活动不足");
       }
 
-      const isLikelySpeech = score >= 60; // 60分以上认为是人声
+      const isLikelySpeech = score >= 45; // 降低到45分，更加宽容，减少误判
 
       console.log(`🎯 音频质量评分: ${score}/100`);
       console.log(`📝 评分原因: ${reasons.join(", ")}`);

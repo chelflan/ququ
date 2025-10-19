@@ -773,21 +773,45 @@ export default function App() {
     console.log("🎤 handleRecordingComplete 被调用:", transcriptionResult);
     if (transcriptionResult.success && transcriptionResult.text) {
       console.log("✅ 转录成功，文本:", transcriptionResult.text);
+
+      // 显示音频质量分析结果（如果有）
+      if (transcriptionResult.quality_analysis) {
+        const qa = transcriptionResult.quality_analysis;
+        console.log(`📊 音频质量分析结果:`);
+        console.log(`   - 评分: ${qa.score}/100`);
+        console.log(`   - 原因: ${qa.reasons.join(", ")}`);
+        console.log(`   - 时长: ${qa.details.duration?.toFixed(2)}s`);
+        console.log(`   - RMS音量: ${qa.details.rmsDb?.toFixed(1)}dB`);
+        console.log(`   - 零交叉率: ${qa.details.zeroCrossingRate?.toFixed(0)}次/秒`);
+        console.log(`   - 频谱重心: ${qa.details.spectralCentroid?.toFixed(0)}Hz`);
+        console.log(`   - 活动比例: ${(qa.details.activityRatio * 100).toFixed(1)}%`);
+      }
+
       // 立即显示FunASR识别的原始文本
       setOriginalText(transcriptionResult.text);
       setShowTextArea(true);
-      
+
       // 清空之前的处理结果，等待AI优化
       setProcessedText("");
 
       // 不立即粘贴，等待AI优化完成后再粘贴
       console.log("⏳ 等待AI优化完成后再进行粘贴...");
-      
+
       // 注意：不在这里保存到数据库，由 useRecording.js 统一处理保存逻辑
 
       toast.success("🎤 语音识别完成，AI正在优化文本...");
     } else {
       console.log("❌ 转录失败或无文本:", transcriptionResult);
+      // 如果是音频质量问题被丢弃，显示提示
+      if (transcriptionResult.error && transcriptionResult.error.includes("音频质量检测未通过")) {
+        console.log("🚫 录音因音频质量问题被丢弃");
+        if (transcriptionResult.quality_analysis) {
+          const qa = transcriptionResult.quality_analysis;
+          toast.warning(`🚫 音频质量检测未通过 (${qa.score}/100分)`, {
+            description: `原因: ${qa.reasons.slice(0, 3).join(", ")}`
+          });
+        }
+      }
     }
   }, []);
 
