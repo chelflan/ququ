@@ -313,7 +313,174 @@ export const useRecording = () => {
     }
   }, [isRecording, stopSilenceDetection]);
 
-  // 处理音频 - 支持预录音数据合并
+  // 智能音频质量检测 - 分析音频是否包含真实的人声
+  const analyzeAudioQuality = useCallback(async (audioBlob) => {
+    try {
+      console.log("🔍 开始智能音频质量分析...");
+
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      const channelData = audioBuffer.getChannelData(0);
+      const sampleRate = audioBuffer.sampleRate;
+      const duration = audioBuffer.duration;
+
+      console.log(`📊 音频基本信息: 时长${duration.toFixed(2)}s, 采样率${sampleRate}Hz, 采样点${channelData.length}`);
+
+      // 1. 计算RMS音量（Root Mean Square）
+      let sum = 0;
+      for (let i = 0; i < channelData.length; i++) {
+        sum += channelData[i] * channelData[i];
+      }
+      const rms = Math.sqrt(sum / channelData.length);
+      const rmsDb = 20 * Math.log10(rms + 1e-10); // 转换为分贝
+
+      console.log(`🔊 RMS音量: ${rms.toFixed(4)} (${rmsDb.toFixed(1)}dB)`);
+
+      // 2. 计算零交叉率（Zero Crossing Rate）- 人声通常有较高的零交叉率
+      let zeroCrossings = 0;
+      for (let i = 1; i < channelData.length; i++) {
+        if ((channelData[i] >= 0) !== (channelData[i-1] >= 0)) {
+          zeroCrossings++;
+        }
+      }
+      const zcr = zeroCrossings / (channelData.length - 1) * sampleRate;
+      console.log(`📈 零交叉率: ${zcr.toFixed(1)} 次/秒`);
+
+      // 3. 计算频谱重心（Spectral Centroid）- 人声通常在特定频段
+      const fftSize = 2048;
+      const fft = new Float32Array(fftSize);
+
+      // 简化的频谱分析
+      let spectralCentroid = 0;
+      let spectralEnergy = 0;
+
+      for (let i = 0; i < Math.min(channelData.length, fftSize); i++) {
+        const magnitude = Math.abs(channelData[i]);
+        const frequency = (i * sampleRate) / fftSize;
+        spectralCentroid += magnitude * frequency;
+        spectralEnergy += magnitude;
+      }
+
+      if (spectralEnergy > 0) {
+        spectralCentroid /= spectralEnergy;
+      }
+      console.log(`🎵 频谱重心: ${spectralCentroid.toFixed(1)}Hz`);
+
+      // 4. 计算动态范围（Dynamic Range）
+      let maxSample = 0;
+      let minSample = 0;
+      for (let i = 0; i < channelData.length; i++) {
+        maxSample = Math.max(maxSample, channelData[i]);
+        minSample = Math.min(minSample, channelData[i]);
+      }
+      const dynamicRange = maxSample - minSample;
+      console.log(`📏 动态范围: ${dynamicRange.toFixed(4)}`);
+
+      // 5. 检测是否有持续的音频活动（不是瞬间噪音）
+      const frameSize = Math.floor(sampleRate * 0.01); // 10ms帧
+      const frameCount = Math.floor(channelData.length / frameSize);
+      let activeFrames = 0;
+
+      const activityThreshold = 0.01; // 音量阈值
+
+      for (let frame = 0; frame < frameCount; frame++) {
+        let frameEnergy = 0;
+        for (let i = 0; i < frameSize; i++) {
+          const sample = channelData[frame * frameSize + i];
+          frameEnergy += sample * sample;
+        }
+        frameEnergy = Math.sqrt(frameEnergy / frameSize);
+
+        if (frameEnergy > activityThreshold) {
+          activeFrames++;
+        }
+      }
+
+      const activityRatio = activeFrames / frameCount;
+      console.log(`⏱️ 音频活动比例: ${(activityRatio * 100).toFixed(1)}%`);
+
+      audioContext.close();
+
+      // 智能评分系统
+      let score = 0;
+      let reasons = [];
+
+      // 音量评分 (30分)
+      if (rmsDb > -30) {
+        score += 30;
+        reasons.push("音量充足");
+      } else if (rmsDb > -40) {
+        score += 20;
+        reasons.push("音量适中");
+      } else if (rmsDb > -50) {
+        score += 10;
+        reasons.push("音量偏低");
+      } else {
+        reasons.push("音量过低");
+      }
+
+      // 零交叉率评分 (25分) - 人声通常在500-2000次/秒
+      if (zcr > 500 && zcr < 2000) {
+        score += 25;
+        reasons.push("零交叉率正常");
+      } else if (zcr > 200 && zcr < 3000) {
+        score += 15;
+        reasons.push("零交叉率可接受");
+      } else {
+        reasons.push("零交叉率异常");
+      }
+
+      // 频谱重心评分 (25分) - 人声通常在500-2000Hz
+      if (spectralCentroid > 500 && spectralCentroid < 2000) {
+        score += 25;
+        reasons.push("频谱重心合适");
+      } else if (spectralCentroid > 300 && spectralCentroid < 3000) {
+        score += 15;
+        reasons.push("频谱重心可接受");
+      } else {
+        reasons.push("频谱重心异常");
+      }
+
+      // 活动比例评分 (20分)
+      if (activityRatio > 0.5) {
+        score += 20;
+        reasons.push("音频活动充分");
+      } else if (activityRatio > 0.3) {
+        score += 10;
+        reasons.push("音频活动一般");
+      } else {
+        reasons.push("音频活动不足");
+      }
+
+      const isLikelySpeech = score >= 60; // 60分以上认为是人声
+
+      console.log(`🎯 音频质量评分: ${score}/100`);
+      console.log(`📝 评分原因: ${reasons.join(", ")}`);
+      console.log(`${isLikelySpeech ? '✅' : '❌'} ${isLikelySpeech ? '检测到人声特征' : '可能是噪音或静音'}`);
+
+      return {
+        isLikelySpeech,
+        score,
+        reasons,
+        details: {
+          rmsDb,
+          zeroCrossingRate: zcr,
+          spectralCentroid,
+          dynamicRange,
+          activityRatio,
+          duration
+        }
+      };
+
+    } catch (error) {
+      console.error("❌ 音频质量分析失败:", error);
+      return { isLikelySpeech: true, score: 50, reasons: ["分析失败，默认通过"] }; // 分析失败时默认通过
+    }
+  }, []);
+
+  // 处理音频 - 支持预录音数据合并和智能质量检测
   const processAudio = useCallback(async (audioBlob, preRecordAudioData = null) => {
     processingRef.current.isProcessingAudio = true;
 
@@ -328,6 +495,20 @@ export const useRecording = () => {
       }
 
       const wavBlob = await convertToWav(finalAudioBlob);
+
+      // 智能音频质量检测
+      const qualityAnalysis = await analyzeAudioQuality(wavBlob);
+
+      // 如果音频质量太差，可能是噪音，直接丢弃
+      if (!qualityAnalysis.isLikelySpeech) {
+        console.log("🚫 音频质量检测未通过，可能是噪音，丢弃处理结果");
+        if (window.electronAPI && window.electronAPI.log) {
+          window.electronAPI.log('info', '音频质量检测未通过，丢弃噪音录音', `评分: ${qualityAnalysis.score}/100`);
+        }
+        return { success: false, error: "音频质量检测未通过，可能是噪音", qualityAnalysis };
+      }
+
+      console.log("✅ 音频质量检测通过，开始语音识别");
 
       if (window.electronAPI) {
         const arrayBuffer = await wavBlob.arrayBuffer();
@@ -347,11 +528,12 @@ export const useRecording = () => {
             duration: transcriptionResult.duration || 0,
             file_size: uint8Array.length,
             has_pre_record: !!preRecordAudioData, // 标记是否包含预录音
+            quality_analysis: qualityAnalysis, // 添加质量分析结果
           };
 
           // 立即显示初步结果
           if (window.onTranscriptionComplete) {
-            window.onTranscriptionComplete({ ...transcriptionResult, enhanced_by_ai: false, has_pre_record: !!preRecordAudioData });
+            window.onTranscriptionComplete({ ...transcriptionResult, enhanced_by_ai: false, has_pre_record: !!preRecordAudioData, quality_analysis: qualityAnalysis });
           }
 
           // 异步处理AI优化和保存（只保存一次）
@@ -412,6 +594,7 @@ export const useRecording = () => {
                     processed_text: finalData.processed_text,
                     enhanced_by_ai: true,
                     has_pre_record: !!preRecordAudioData,
+                    quality_analysis: qualityAnalysis,
                   };
                   if (window.onAIOptimizationComplete) {
                     window.onAIOptimizationComplete(enhancedResult);
@@ -423,6 +606,7 @@ export const useRecording = () => {
                     text: raw_text,
                     enhanced_by_ai: false,
                     has_pre_record: !!preRecordAudioData,
+                    quality_analysis: qualityAnalysis,
                   };
                   if (window.onAIOptimizationComplete) {
                     window.onAIOptimizationComplete(finalResult);
@@ -438,22 +622,22 @@ export const useRecording = () => {
             }
           }, 100);
 
-          return { ...transcriptionResult, enhanced_by_ai: false, has_pre_record: !!preRecordAudioData };
+          return { ...transcriptionResult, enhanced_by_ai: false, has_pre_record: !!preRecordAudioData, quality_analysis: qualityAnalysis };
         } else {
           throw new Error(transcriptionResult.error || '语音识别失败');
         }
       } else {
         // Web环境模拟
         const mockResult = { success: true, text: '模拟识别结果。', confidence: 0.95, duration: 3.5 };
-        if (window.onTranscriptionComplete) window.onTranscriptionComplete({ ...mockResult, has_pre_record: !!preRecordAudioData });
-        return { ...mockResult, has_pre_record: !!preRecordAudioData };
+        if (window.onTranscriptionComplete) window.onTranscriptionComplete({ ...mockResult, has_pre_record: !!preRecordAudioData, quality_analysis: qualityAnalysis });
+        return { ...mockResult, has_pre_record: !!preRecordAudioData, quality_analysis: qualityAnalysis };
       }
     } catch (err) {
       throw new Error(`音频处理失败: ${err.message}`);
     } finally {
       processingRef.current.isProcessingAudio = false;
     }
-  }, []);
+  }, [analyzeAudioQuality]);
 
   // 合并预录音数据和实际录音数据
   const mergeAudioData = useCallback(async (preRecordFloat32Array, recordedBlob) => {

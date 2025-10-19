@@ -384,36 +384,36 @@ export default function App() {
   const getVoiceDetectionSettings = useCallback(async () => {
     try {
       if (window.electronAPI) {
-        const threshold = await window.electronAPI.getSetting('voice_threshold', 25); // 调整到25%，平衡灵敏度和防误触发
+        const threshold = await window.electronAPI.getSetting('voice_threshold', 20); // 降低到20%，实现快速触发
         setVoiceThreshold(threshold); // 更新UI显示的阈值
 
         return {
           volumeThreshold: threshold / 100, // 转换为小数
-          voiceBandThreshold: await window.electronAPI.getSetting('voice_band_threshold', 40) / 100, // 保持40%
-          highFreqThreshold: await window.electronAPI.getSetting('high_freq_threshold', 25) / 100, // 保持25%
+          voiceBandThreshold: await window.electronAPI.getSetting('voice_band_threshold', 35) / 100, // 降低到35%，更宽松的触发
+          highFreqThreshold: await window.electronAPI.getSetting('high_freq_threshold', 20) / 100, // 降低到20%，更敏感
           silenceDuration: await window.electronAPI.getSetting('silence_duration', 800), // 800ms
-          voiceFramesRequired: await window.electronAPI.getSetting('voice_frames_required', 2) // 降低到2帧确认
+          voiceFramesRequired: await window.electronAPI.getSetting('voice_frames_required', 1) // 降低到1帧确认，快速响应
         };
       }
-      // 默认值 - 平衡灵敏度和防误触发
-      setVoiceThreshold(25);
+      // 默认值 - 快速触发参数，后续通过智能音频质量检测过滤
+      setVoiceThreshold(20);
       return {
-        volumeThreshold: 0.25, // 调整到25%，适合正常语音
-        voiceBandThreshold: 0.40, // 保持40%
-        highFreqThreshold: 0.25, // 保持25%
+        volumeThreshold: 0.20, // 降低到20%，实现快速触发
+        voiceBandThreshold: 0.35, // 降低到35%，更宽松的触发
+        highFreqThreshold: 0.20, // 降低到20%，更敏感
         silenceDuration: 800, // 800ms
-        voiceFramesRequired: 2 // 降低到2帧确认
+        voiceFramesRequired: 1 // 降低到1帧确认，快速响应
       };
     } catch (error) {
       console.error("获取语音检测设置失败:", error);
-      setVoiceThreshold(25);
-      // 返回平衡的默认值
+      setVoiceThreshold(20);
+      // 返回快速触发的默认值
       return {
-        volumeThreshold: 0.25, // 调整到25%
-        voiceBandThreshold: 0.40, // 保持40%
-        highFreqThreshold: 0.25, // 保持25%
+        volumeThreshold: 0.20, // 降低到20%
+        voiceBandThreshold: 0.35, // 降低到35%
+        highFreqThreshold: 0.20, // 降低到20%
         silenceDuration: 800, // 800ms
-        voiceFramesRequired: 2 // 降低到2帧确认
+        voiceFramesRequired: 1 // 降低到1帧确认
       };
     }
   }, []);
@@ -480,8 +480,8 @@ export default function App() {
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
 
-      // 初始化预录音缓冲区 - 保存2秒的音频数据
-      const preRecordDuration = 2000; // 2秒预录音
+      // 初始化预录音缓冲区 - 保存3秒的音频数据，确保捕获语音开头
+      const preRecordDuration = 3000; // 3秒预录音，确保捕获完整的语音开头
       preRecordBufferRef.current = new CircularAudioBuffer(
         preRecordDuration,
         16000, // 16kHz采样率
@@ -601,7 +601,7 @@ export default function App() {
         const cooldown = 100; // 减少冷却时间到100ms
         const shouldStartRecording =
           vad.isVoiceDetected &&                              // 检测到语音特征
-          vad.consecutiveVoiceFrames >= 2 &&                  // 降低到2帧确认即可触发
+          vad.consecutiveVoiceFrames >= 1 &&                  // 降低到1帧确认，快速响应
           !isRecording &&                                     // 未在录音
           !isRecordingProcessing &&                           // 未在处理
           modelStatus.isReady &&                              // 模型就绪
@@ -626,7 +626,7 @@ export default function App() {
 
           console.log(`🎯 确认为真实语音！开始录音（包含预录音数据）`);
           console.log(`📊 语音特征确认:`);
-          console.log(`   - 连续语音帧: ${vad.consecutiveVoiceFrames}/2帧 ✓`);
+          console.log(`   - 连续语音帧: ${vad.consecutiveVoiceFrames}/1帧 ✓`);
           console.log(`   - 音量特征: ${(normalizedVolume * 100).toFixed(1)}% ✓`);
           console.log(`   - 语音频段: ${(voiceBandRatio * 100).toFixed(1)}% ✓`);
           console.log(`   - 高频特征: ${(highFreqRatio * 100).toFixed(1)}% ✓`);
