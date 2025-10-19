@@ -10,6 +10,7 @@ import { useModelStatus } from "./hooks/useModelStatus";
 import { usePermissions } from "./hooks/usePermissions";
 import { Mic, MicOff, Settings, History, Copy, Download } from "lucide-react";
 import SettingsPanel from "./components/SettingsPanel";
+import StreamingRecognition from "./components/StreamingRecognition";
 import { ModelDownloadProgress } from "./components/ui/model-status-indicator";
 
 // 动态导入设置页面组件
@@ -219,6 +220,7 @@ export default function App() {
   const [processedText, setProcessedText] = useState("");
   const [showTextArea, setShowTextArea] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showStreamingRecognition, setShowStreamingRecognition] = useState(false);
   const [voiceActivationEnabled, setVoiceActivationEnabled] = useState(false);
   const [currentVolume, setCurrentVolume] = useState(0);
   const [voiceThreshold, setVoiceThreshold] = useState(20); // 存储当前音量阈值
@@ -845,19 +847,31 @@ export default function App() {
     console.log('设置回调函数');
     window.onTranscriptionComplete = handleRecordingComplete;
     window.onAIOptimizationComplete = handleAIOptimizationComplete;
-    
+
+    // 设置流式识别回调
+    window.onStreamingTranscriptionUpdate = (update) => {
+      console.log('📝 收到流式识别更新:', update);
+      setOriginalText(update.text);
+      setShowTextArea(true);
+
+      // 自动粘贴流式识别的文本
+      safePaste(update.text);
+    };
+
     // 验证回调函数是否正确设置
     console.log('回调函数设置完成:', {
       onTranscriptionComplete: typeof window.onTranscriptionComplete,
-      onAIOptimizationComplete: typeof window.onAIOptimizationComplete
+      onAIOptimizationComplete: typeof window.onAIOptimizationComplete,
+      onStreamingTranscriptionUpdate: typeof window.onStreamingTranscriptionUpdate
     });
-    
+
     return () => {
       console.log('清理回调函数');
       window.onTranscriptionComplete = null;
       window.onAIOptimizationComplete = null;
+      window.onStreamingTranscriptionUpdate = null;
     };
-  }, [handleRecordingComplete, handleAIOptimizationComplete]);
+  }, [handleRecordingComplete, handleAIOptimizationComplete, safePaste]);
 
   // 处理复制文本
   const handleCopyText = async (text) => {
@@ -1010,6 +1024,21 @@ export default function App() {
     if (window.electronAPI) {
       window.electronAPI.openHistoryWindow();
     }
+  };
+
+  // 处理流式识别
+  const handleStreamingRecognition = () => {
+    setShowStreamingRecognition(true);
+  };
+
+  // 处理流式识别文本更新
+  const handleStreamingTextUpdate = (text) => {
+    console.log("📝 流式识别文本更新:", text);
+    setOriginalText(text);
+    setShowTextArea(true);
+
+    // 自动粘贴流式识别的文本
+    safePaste(text);
   };
 
 
@@ -1206,7 +1235,7 @@ export default function App() {
                 <History className="w-6 h-6 text-gray-700 dark:text-gray-300" />
               </button>
             </Tooltip>
-            <Tooltip content="设置" position="bottom">
+                <Tooltip content="设置" position="bottom">
               <button
                 onClick={handleOpenSettings}
                 className="p-3 hover:bg-white/70 dark:hover:bg-gray-700/70 rounded-xl transition-colors shadow-sm"
@@ -1307,6 +1336,14 @@ export default function App() {
       {/* 设置面板 */}
       {showSettings && (
         <SettingsPanel onClose={() => setShowSettings(false)} />
+      )}
+
+      {/* 流式语音识别组件 */}
+      {showStreamingRecognition && (
+        <StreamingRecognition
+          onClose={() => setShowStreamingRecognition(false)}
+          onTextUpdate={handleStreamingTextUpdate}
+        />
       )}
 
     </div>

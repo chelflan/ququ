@@ -16,7 +16,7 @@ const SettingsPage = () => {
     voice_threshold: 20, // 降低到20%，实现快速触发
     voice_band_threshold: 35, // 降低到35%，更宽松的触发
     high_freq_threshold: 20, // 降低到20%，更敏感
-    silence_duration: 2000, // 增加到2秒，避免过早停止
+    silence_duration: 8000, // 增加到8秒，支持流式语音识别
     voice_frames_required: 1 // 降低到1帧确认，快速响应
   });
   

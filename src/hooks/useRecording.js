@@ -30,6 +30,12 @@ export const useRecording = () => {
     checkInterval: null
   });
 
+  // 流式识别相关引用
+  const streamingIntervalRef = useRef(null);
+  const audioChunkBufferRef = useRef([]);
+  const lastRecognitionTimeRef = useRef(0);
+  const streamingTextRef = useRef(''); // 累积的流式识别文本
+
   // 使用模型状态Hook
   const modelStatus = useModelStatus();
 
@@ -38,19 +44,19 @@ export const useRecording = () => {
     if (!streamRef.current || audioContextRef.current) return;
 
     try {
-      console.log("🔇 启动声音结束检测（针对语音识别优化）");
+      console.log("🔇 启动流式语音识别检测");
 
-      // 获取语音检测设置 - 调整为更适合语音识别的参数
+      // 获取语音检测设置 - 针对流式语音识别优化
       let silenceThreshold = 0.05; // 降低到5%，避免误判正常的语音停顿
-      let silenceDuration = 2000; // 增加到2秒，给用户更充分的说话时间
+      let silenceDuration = 8000; // 增加到8秒，允许长时间的语音停顿而不停止录音
 
       if (window.electronAPI) {
         try {
           const threshold = await window.electronAPI.getSetting('voice_threshold', 20);
-          const duration = await window.electronAPI.getSetting('silence_duration', 2000); // 默认2秒
+          const duration = await window.electronAPI.getSetting('silence_duration', 8000); // 默认8秒
           silenceThreshold = threshold / 100; // 转换为小数
           silenceDuration = duration;
-          console.log(`📋 加载静音检测配置: 阈值${(silenceThreshold * 100).toFixed(0)}%, 持续${silenceDuration}ms`);
+          console.log(`📋 加载流式识别配置: 阈值${(silenceThreshold * 100).toFixed(0)}%, 持续${silenceDuration}ms`);
         } catch (error) {
           console.error("获取静音检测设置失败，使用默认值:", error);
         }
@@ -158,7 +164,13 @@ export const useRecording = () => {
 
   // 停止声音结束检测
   const stopSilenceDetection = useCallback(() => {
-    console.log("⏹️ 停止声音结束检测");
+    console.log("⏹️ 停止流式语音识别检测");
+
+    // 停止流式识别
+    if (streamingIntervalRef.current) {
+      clearInterval(streamingIntervalRef.current);
+      streamingIntervalRef.current = null;
+    }
 
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -183,7 +195,83 @@ export const useRecording = () => {
       isBelowThreshold: false,
       checkInterval: null
     };
+
+    // 重置流式识别状态
+    audioChunkBufferRef.current = [];
+    streamingTextRef.current = '';
   }, []);
+
+  // 流式识别音频块处理
+  const recognizeAudioChunk = useCallback(async (audioBlob) => {
+    if (!audioBlob || audioBlob.size < 1024) return; // 忽略太小的音频块
+
+    try {
+      console.log("🎵 处理流式音频块:", audioBlob.size, "bytes");
+
+      // 转换为WAV格式
+      const wavBlob = await convertToWav(audioBlob);
+
+      if (window.electronAPI) {
+        const arrayBuffer = await wavBlob.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        // 发送识别请求
+        const result = await window.electronAPI.transcribeAudio(uint8Array);
+
+        if (result.success && result.text && result.text.trim()) {
+          const now = Date.now();
+
+          // 防重复识别（1秒内相同文本不重复处理）
+          if (now - lastRecognitionTimeRef.current > 1000) {
+            lastRecognitionTimeRef.current = now;
+
+            // 更新累积的流式文本
+            streamingTextRef.current += (streamingTextRef.current ? '' : '') + result.text;
+            console.log("📝 流式识别结果:", streamingTextRef.current);
+
+            // 立即更新UI显示
+            if (window.onStreamingTranscriptionUpdate) {
+              window.onStreamingTranscriptionUpdate({
+                text: streamingTextRef.current,
+                isNewChunk: true,
+                chunkText: result.text,
+                confidence: result.confidence || 0
+              });
+            }
+
+            // 可选：实时复制到剪贴板
+            if (window.electronAPI && window.electronAPI.copyToClipboard) {
+              window.electronAPI.copyToClipboard(result.text);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("流式音频块识别失败:", err);
+    }
+  }, []);
+
+  // 启动流式识别
+  const startStreamingRecognition = useCallback(() => {
+    console.log("🎵 启动流式识别循环");
+
+    // 每2秒处理一次音频块进行识别
+    streamingIntervalRef.current = setInterval(async () => {
+      if (audioChunkBufferRef.current.length > 0) {
+        // 合并音频块
+        const audioChunks = [...audioChunkBufferRef.current];
+        audioChunkBufferRef.current = []; // 清空缓冲区
+
+        if (audioChunks.length > 0) {
+          const combinedBlob = new Blob(audioChunks, {
+            type: 'audio/webm;codecs=opus'
+          });
+
+          await recognizeAudioChunk(combinedBlob);
+        }
+      }
+    }, 2000); // 每2秒处理一次音频块
+  }, [recognizeAudioChunk]);
 
   // 开始录音 - 支持预录音数据和模式区分
   const startRecording = useCallback(async (preRecordAudioData = null, isAutoMode = false) => {
@@ -244,6 +332,11 @@ export const useRecording = () => {
           } else {
             audioChunksRef.current.push(event.data);
           }
+
+          // 在自动模式下，收集音频块用于流式识别
+          if (isAutoMode) {
+            audioChunkBufferRef.current.push(event.data);
+          }
         }
       };
 
@@ -281,12 +374,18 @@ export const useRecording = () => {
 
       console.log(`🎤 开始${isAutoMode ? '自动' : '手动'}录音${preRecordAudioData ? '（包含预录音数据）' : ''}`);
 
-      // 只有在自动模式下才启动声音结束检测
+      // 只有在自动模式下才启动声音结束检测和流式识别
       if (isAutoMode) {
         setTimeout(() => {
           startSilenceDetection();
         }, 200); // 延迟200ms启动检测，避免立即检测到静音
-        console.log("🔇 自动模式：已启用静音检测");
+
+        // 启动流式识别
+        setTimeout(() => {
+          startStreamingRecognition();
+        }, 3000); // 延迟3秒开始流式识别，确保有足够音频数据
+
+        console.log("🔇 自动模式：已启用静音检测和流式识别");
       } else {
         console.log("🎯 手动模式：录音将持续直到用户手动停止");
       }
